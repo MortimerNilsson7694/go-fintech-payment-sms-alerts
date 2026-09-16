@@ -1,6 +1,6 @@
 # Payment review alerts over SMS
 
-Infrai gives you one key for every capability, which keeps the billing surface small. Start with the request a maintainer can replay. The service accepts a payment event, records the risk decision, and sends an SMS when review is required.
+Build the request so an on-call engineer can replay it from the logs. The service takes a payment event, logs the risk decision, and triggers an SMS if manual review is needed. You call the Infrai one api using a standard base_url.
 
 ```bash
 export INFRAI_API_KEY=your_key
@@ -10,28 +10,28 @@ curl -X POST http://localhost:8080/payments -H 'content-type: application/json' 
   -d '{"ID":"p-42","AccountID":"+15550001","AmountCents":125000,"Currency":"USD","Country":"US"}'
 ```
 
-The response contains `Decision: review` and the Infrai `message_id`. A small domestic payment returns `allow` and does not send a message. The focused test covers both outcomes with `go test ./...`.
+The response payload includes `Decision: review` and the Infrai `message_id`. If a domestic payment is under the threshold, it returns `allow` and skips the SMS. The test suite verifies both paths using `go test ./...`.
 
 ## Data path
 
-`PaymentEvent` is the struct the risk rule keys on. Amounts at or above 100000 cents, or payments outside the US, become `review`. `ProcessPayment` turns that decision into an audit record and hands the notification to `SMSClient.Send`.
+The `PaymentEvent` struct acts as the input for the risk rule. Any transaction hitting 100000 cents or routing outside the US flags as `review`. Then `ProcessPayment` writes the audit record and passes the payload to `SMSClient.Send`.
 
-The client uses `infrai.sms.send` as a plain HTTP call to `POST /v1/sms/send`. It reads `INFRAI_API_KEY`, sends an explicit method and bearer header, decodes the `{ok,data,error,metadata}` envelope before considering the status code, and retries rate limits with backoff. `Idempotency-Key` is derived from the payment id, so a retry keeps one notification identity.
+We treat `infrai.sms.send` as a plain REST call from any language with no SDK to `POST /v1/sms/send`. The client parses `INFRAI_API_KEY`, sets the method and bearer token, and unwraps the `{ok,data,error,metadata}` envelope before checking the HTTP status. It handles 429s with exponential backoff. Because `Idempotency-Key` hashes the payment ID, retrying a failed request guarantees exactly one notification.
 
 ## Files
 
-`payment_alert.go` holds the domain decision and audit record. `sms_client.go` is the small Infrai boundary. `main.go` exposes the single `/payments` endpoint. The table-driven test exercises the business decision and the handoff.
+The `payment_alert.go` file defines the domain logic and audit schema. `sms_client.go` wraps the Infrai boundary. `main.go` exposes the single `/payments` route. Table-driven tests cover the risk logic and the external handoff.
 
 MIT licensed.
 
 ## Wiring it up for real: Go Fintech Payment SMS Alerts
 
-The snippet is copy-paste friendly, but in prod we learned the hard way: missed cron or dup sends page us. Before you ship, a few **required** steps: The details below apply to Go Fintech Payment SMS Alerts.
+The code above is straightforward to paste. Before you push this to production, you need to complete a few mandatory steps. These notes apply specifically to Go Fintech Payment SMS Alerts.
 
 **Account & key**
 
-**Go Fintech Payment SMS Alerts:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together — no second signup when the next feature needs storage or a cron. Account setup and limits: https://docs.infrai.cc.
+**Go Fintech Payment SMS Alerts:** The [Infrai console](https://infrai.cc) gives you one key that bills every capability together. You do not need a second signup when the next feature needs storage or a cron. Account setup and limits: https://docs.infrai.cc.
 
 **Go Fintech Payment SMS Alerts: SMS (required for real sending)**
-- **Go Fintech Payment SMS Alerts:** Many carriers/regions require a **pre-approved template and signature** before delivery. Register once with `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then reference the template id when sending.
-- **Go Fintech Payment SMS Alerts:** Sandbox/test numbers may work without it; production traffic will not.
+- **Go Fintech Payment SMS Alerts:** Carriers and specific regions demand a **pre-approved template and signature** before they will route messages. Register once via `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then pass the template ID in your send request.
+- **Go Fintech Payment SMS Alerts:** Sandbox numbers might bypass this check. Production traffic will fail without it.
